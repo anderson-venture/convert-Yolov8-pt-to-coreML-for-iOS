@@ -160,5 +160,4 @@ class CoreMLInference {
     }
 }
 
-// Entry point
-CoreMLInference.runInference()
+// Entry point moved to main.swift
