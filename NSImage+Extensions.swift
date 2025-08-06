@@ -45,33 +45,40 @@ extension NSImage {
         
         // Convert to CVPixelBuffer
         var pixelBuffer: CVPixelBuffer?
+        
+        // ✅ Use RGB format for better CoreML compatibility
         let attrs: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
             kCVPixelBufferCGBitmapContextCompatibilityKey: true,
             kCVPixelBufferWidthKey: targetSize,
             kCVPixelBufferHeightKey: targetSize,
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32ARGB
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA  // Better CoreML compatibility
         ]
         
-        CVPixelBufferCreate(kCFAllocatorDefault, targetSize, targetSize,
-                            kCVPixelFormatType_32ARGB, attrs as CFDictionary, &pixelBuffer)
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, targetSize, targetSize,
+                                        kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pixelBuffer)
         
-        guard let buffer = pixelBuffer else {
+        guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
+            print("❌ Failed to create pixel buffer: \(status)")
             return (nil, scale, xOffset, yOffset, finalCanvas)
         }
         
         CVPixelBufferLockBaseAddress(buffer, [])
-        if let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buffer),
-                               width: targetSize,
-                               height: targetSize,
-                               bitsPerComponent: 8,
-                               bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-                               space: CGColorSpaceCreateDeviceRGB(),
-                               bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue),
-           let finalCG = finalCanvas.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-            ctx.draw(finalCG, in: CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        
+        guard let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buffer),
+                                 width: targetSize,
+                                 height: targetSize,
+                                 bitsPerComponent: 8,
+                                 bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+                                 space: CGColorSpaceCreateDeviceRGB(),
+                                 bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue),
+              let finalCG = finalCanvas.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            print("❌ Failed to create graphics context")
+            return (nil, scale, xOffset, yOffset, finalCanvas)
         }
-        CVPixelBufferUnlockBaseAddress(buffer, [])
+        
+        ctx.draw(finalCG, in: CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
         
         return (buffer, scale, xOffset, yOffset, finalCanvas)
     }

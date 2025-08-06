@@ -8,11 +8,12 @@ class CoreMLInference {
         print("🚀 Starting CoreML YOLOv8 Table Detection")
         
         // === Load the CoreML Model ===
-        // Try different possible model locations
+        // ✅ Try relative paths that work across different machines
         let possibleModelPaths = [
-            "/Users/malvernnzwere/Desktop/CoreMLCompiled/1600Model_without_mosaic_rotation2_perspective0.0025.mlmodelc",
+            "./1600Model_without_mosaic_rotation2_perspective0.0025.mlpackage",
             "./1600Model_without_mosaic_rotation2_perspective0.0025.mlmodel",
             "./1600Model_without_mosaic_rotation2_perspective0.0025.mlmodelc",
+            "1600Model_without_mosaic_rotation2_perspective0.0025.mlpackage",
             "1600Model_without_mosaic_rotation2_perspective0.0025.mlmodel"
         ]
         
@@ -43,7 +44,8 @@ class CoreMLInference {
         print("📋 Model outputs: \(modelDescription.outputDescriptionsByName.keys)")
         
         // === Load images from folder ===
-        let imagesFolder = URL(fileURLWithPath: "/Users/malvernnzwere/Library/CloudStorage/OneDrive-Personal/Yolo training folders/New images 1920x1440 og")
+        // ✅ Use relative path for better portability
+        let imagesFolder = URL(fileURLWithPath: "./test_images/New images 1920x1440 og")
         let fileManager = FileManager.default
         
         guard let imageFiles = try? fileManager.contentsOfDirectory(at: imagesFolder, includingPropertiesForKeys: nil) else {
@@ -104,9 +106,9 @@ class CoreMLInference {
             
             print("📦 Available outputs: \(finalPrediction.featureNames)")
             
-            // Try different possible output names
+            // Try different possible output names (including more common ones)
             var rawOutput: MLMultiArray?
-            let possibleOutputNames = ["var_914", "output", "output0", "Identity", "Identity:0", "1"]
+            let possibleOutputNames = ["output", "output0", "Identity", "Identity:0", "var_914", "1", "predictions", "detections"]
             
             for outputName in possibleOutputNames {
                 if let output = finalPrediction.featureValue(for: outputName)?.multiArrayValue {

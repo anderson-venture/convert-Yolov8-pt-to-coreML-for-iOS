@@ -157,14 +157,13 @@ class YOLOv8OutputParser {
             detections.append(detection)
         }
         
-        print("🎯 Found \(detections.count) raw detections before NMS")
+        print("🎯 Found \(detections.count) raw detections")
         
-        // Apply NMS if model was exported without NMS
-        let finalDetections = performNMS(detections: detections, iouThreshold: 0.5)
+        // ✅ Check if NMS was included in model export (pt2CoreML.py has include_nms = True)
+        // Since NMS is already applied in the model, skip additional NMS to avoid over-filtering
+        print("ℹ️ Note: NMS already applied in CoreML model during export")
         
-        print("🎯 Final detections after NMS: \(finalDetections.count)")
-        
-        return finalDetections
+        return detections
     }
     
     private static func getOutputValue(_ output: MLMultiArray, boxIndex: Int, featureIndex: Int, shape: [Int]) -> Float {
