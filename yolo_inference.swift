@@ -190,9 +190,14 @@ class YOLOv8OutputParser {
             let rect = CGRect(
                 x: originalX1,
                 y: originalY1,
-                width: originalX2 - originalX1,
-                height: originalY2 - originalY1
+                width: max(0, originalX2 - originalX1),
+                height: max(0, originalY2 - originalY1)
             )
+            
+            // Debug final rect for high-confidence detections
+            if maxConfidence > 0.8 {
+                print("      Final rect: \(rect)")
+            }
             
             let className = bestClassIndex < classNames.count ? classNames[bestClassIndex] : "unknown"
             
@@ -208,8 +213,9 @@ class YOLOv8OutputParser {
         
         print("🎯 Found \(detections.count) raw detections")
         
-        // Since the model was exported with nms=False, we need to apply more aggressive NMS
-        let nmsDetections = performNMS(detections: detections, iouThreshold: 0.3)  // More aggressive
+        // Since the model was exported with nms=False, we need to apply very aggressive NMS
+        // The model outputs many near-identical detections that need to be merged
+        let nmsDetections = performNMS(detections: detections, iouThreshold: 0.1)  // Very aggressive
         print("🎯 After NMS: \(nmsDetections.count) final detections")
         
         return nmsDetections
@@ -238,10 +244,13 @@ class YOLOv8OutputParser {
             var shouldKeep = true
             
             for existingDetection in finalDetections {
-                let iou = calculateIoU(detection.rect, existingDetection.rect)
-                if iou > iouThreshold {
-                    shouldKeep = false
-                    break
+                // Only compare detections of the same class
+                if detection.classIndex == existingDetection.classIndex {
+                    let iou = calculateIoU(detection.rect, existingDetection.rect)
+                    if iou > iouThreshold {
+                        shouldKeep = false
+                        break
+                    }
                 }
             }
             
