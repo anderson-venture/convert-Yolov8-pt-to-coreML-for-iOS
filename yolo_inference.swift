@@ -53,7 +53,9 @@ class YOLOv8OutputParser {
     static func parse(
         rawOutput: MLMultiArray,
         confidenceThreshold: Float = 0.25,
-        scale: CGFloat
+        scale: CGFloat,
+        originalImageSize: CGSize,
+        targetSize: Int
     ) -> [Detection] {
         
         print("🔍 Raw output shape: \(rawOutput.shape)")
@@ -132,17 +134,26 @@ class YOLOv8OutputParser {
             let x2 = centerX + width / 2
             let y2 = centerY + height / 2
             
+            // Calculate the centering offsets used when creating the pixel buffer
+            let scaledImageWidth = originalImageSize.width * scale
+            let scaledImageHeight = originalImageSize.height * scale
+            let xOffset = (CGFloat(targetSize) - scaledImageWidth) / 2.0
+            let yOffset = (CGFloat(targetSize) - scaledImageHeight) / 2.0
+            
             // Debug first few detections
             if boxIndex < 3 && maxConfidence > confidenceThreshold {
                 print("🔍 Detection \(boxIndex): cx=\(centerX), cy=\(centerY), w=\(width), h=\(height), conf=\(maxConfidence)")
                 print("    Box: (\(x1), \(y1), \(x2), \(y2))")
+                print("    Offsets: x=\(xOffset), y=\(yOffset), scale=\(scale)")
             }
             
-            // Convert coordinates back to original image space (no letterboxing offsets)
-            let originalX1 = max(0, CGFloat(x1) / scale)
-            let originalY1 = max(0, CGFloat(y1) / scale)
-            let originalX2 = CGFloat(x2) / scale
-            let originalY2 = CGFloat(y2) / scale
+            // Convert coordinates back to original image space
+            // 1. Subtract the centering offset
+            // 2. Scale back to original image coordinates
+            let originalX1 = max(0, (CGFloat(x1) - xOffset) / scale)
+            let originalY1 = max(0, (CGFloat(y1) - yOffset) / scale)
+            let originalX2 = (CGFloat(x2) - xOffset) / scale
+            let originalY2 = (CGFloat(y2) - yOffset) / scale
             
             let rect = CGRect(
                 x: originalX1,
@@ -262,25 +273,27 @@ extension NSImage {
             finalImage = self
         }
         
-        // Convert to CVPixelBuffer with actual image dimensions (no letterboxing)
+        // Convert to CVPixelBuffer - CoreML models often expect fixed input sizes
+        // Let's create a square canvas like the original, but without letterboxing artifacts
         guard let finalCGImage = finalImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             print("❌ Failed to get CGImage from final image")
             return (nil, scale, finalImage)
         }
         
-        let finalWidth = finalCGImage.width
-        let finalHeight = finalCGImage.height
+        // Use the target size for the pixel buffer (model likely expects 1600x1600)
+        let bufferWidth = targetSize
+        let bufferHeight = targetSize
         
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
             kCVPixelBufferCGBitmapContextCompatibilityKey: true,
-            kCVPixelBufferWidthKey: finalWidth,
-            kCVPixelBufferHeightKey: finalHeight,
+            kCVPixelBufferWidthKey: bufferWidth,
+            kCVPixelBufferHeightKey: bufferHeight,
             kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA
         ]
         
-        let status = CVPixelBufferCreate(kCFAllocatorDefault, finalWidth, finalHeight,
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, bufferWidth, bufferHeight,
                                         kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pixelBuffer)
         
         guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
@@ -292,8 +305,8 @@ extension NSImage {
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
         
         guard let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buffer),
-                                 width: finalWidth,
-                                 height: finalHeight,
+                                 width: bufferWidth,
+                                 height: bufferHeight,
                                  bitsPerComponent: 8,
                                  bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
                                  space: CGColorSpaceCreateDeviceRGB(),
@@ -302,7 +315,17 @@ extension NSImage {
             return (nil, scale, finalImage)
         }
         
-        ctx.draw(finalCGImage, in: CGRect(x: 0, y: 0, width: finalWidth, height: finalHeight))
+        // Fill with black background first
+        ctx.setFillColor(CGColor.black)
+        ctx.fill(CGRect(x: 0, y: 0, width: bufferWidth, height: bufferHeight))
+        
+        // Center the image in the buffer
+        let imageWidth = finalCGImage.width
+        let imageHeight = finalCGImage.height
+        let xOffset = (bufferWidth - imageWidth) / 2
+        let yOffset = (bufferHeight - imageHeight) / 2
+        
+        ctx.draw(finalCGImage, in: CGRect(x: xOffset, y: yOffset, width: imageWidth, height: imageHeight))
         
         return (buffer, scale, finalImage)
     }
@@ -469,10 +492,24 @@ func runInference() {
     }
     print("✅ Model loaded successfully from: \(usedPath)")
     
-    // Print model information for debugging
+    // Print detailed model information for debugging
     let modelDescription = finalModel.modelDescription
     print("📋 Model inputs: \(modelDescription.inputDescriptionsByName.keys)")
     print("📋 Model outputs: \(modelDescription.outputDescriptionsByName.keys)")
+    
+    // Print detailed input requirements
+    for (name, inputDesc) in modelDescription.inputDescriptionsByName {
+        print("📋 Input '\(name)':")
+        print("   Type: \(inputDesc.type)")
+        if let imageConstraint = inputDesc.imageConstraint {
+            print("   Image size: \(imageConstraint.pixelsWide) x \(imageConstraint.pixelsHigh)")
+            print("   Pixel format: \(imageConstraint.pixelFormatType)")
+        }
+        if let multiArrayConstraint = inputDesc.multiArrayConstraint {
+            print("   MultiArray shape: \(multiArrayConstraint.shape)")
+            print("   Data type: \(multiArrayConstraint.dataType)")
+        }
+    }
     
     // === Load images from folder ===
     // ✅ Use relative path for better portability
@@ -511,26 +548,47 @@ func runInference() {
             continue
         }
         
-        // Predict - try different input methods
+        // Debug pixel buffer info
+        print("🔍 Pixel buffer info:")
+        print("   Size: \(CVPixelBufferGetWidth(buffer)) x \(CVPixelBufferGetHeight(buffer))")
+        print("   Format: \(CVPixelBufferGetPixelFormatType(buffer))")
+        
+        // Predict - try different input methods with detailed error reporting
         var prediction: MLFeatureProvider?
+        var lastError: Error?
         
         // Method 1: Try using YOLOInput wrapper
+        print("🔍 Method 1: Trying YOLOInput wrapper...")
         let input = YOLOInput(image: buffer)
-        prediction = try? finalModel.prediction(from: input)
+        do {
+            prediction = try finalModel.prediction(from: input)
+            print("✅ YOLOInput succeeded!")
+        } catch {
+            print("❌ YOLOInput failed: \(error.localizedDescription)")
+            lastError = error
+        }
         
         // Method 2: If that fails, try direct input
         if prediction == nil {
-            print("⚠️ YOLOInput failed, trying direct input...")
+            print("🔍 Method 2: Trying direct input...")
             let inputName = modelDescription.inputDescriptionsByName.keys.first ?? "image"
-            print("🔍 Using input name: \(inputName)")
+            print("   Using input name: \(inputName)")
             
-            if let directInput = try? MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: buffer)]) {
-                prediction = try? finalModel.prediction(from: directInput)
+            do {
+                let directInput = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: buffer)])
+                prediction = try finalModel.prediction(from: directInput)
+                print("✅ Direct input succeeded!")
+            } catch {
+                print("❌ Direct input failed: \(error.localizedDescription)")
+                lastError = error
             }
         }
         
         guard let finalPrediction = prediction else {
             print("❌ All inference methods failed for \(imageURL.lastPathComponent)")
+            if let error = lastError {
+                print("   Last error: \(error)")
+            }
             continue
         }
         
@@ -566,7 +624,9 @@ func runInference() {
         let detections = YOLOv8OutputParser.parse(
             rawOutput: output,
             confidenceThreshold: 0.25, // Lower threshold to catch more detections
-            scale: scale
+            scale: scale,
+            originalImageSize: nsImage.size,
+            targetSize: targetSize
         )
         
         print("🎯 Final detections: \(detections.count)")
