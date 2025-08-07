@@ -53,10 +53,7 @@ class YOLOv8OutputParser {
     static func parse(
         rawOutput: MLMultiArray,
         confidenceThreshold: Float = 0.25,
-        inputImageSize: CGSize,
-        scale: CGFloat,
-        xOffset: CGFloat,
-        yOffset: CGFloat
+        scale: CGFloat
     ) -> [Detection] {
         
         print("🔍 Raw output shape: \(rawOutput.shape)")
@@ -129,42 +126,23 @@ class YOLOv8OutputParser {
             let width = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 2, shape: shape)
             let height = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 3, shape: shape)
             
-            // YOLOv8 outputs can be in different formats:
-            // 1. Normalized (0-1) coordinates
-            // 2. Pixel coordinates relative to input size
-            
-            // Check if coordinates are normalized (values between 0-1)
-            let isNormalized = centerX <= 1.0 && centerY <= 1.0 && width <= 1.0 && height <= 1.0
+            // Convert from center format to corner format (assuming pixel coordinates)
+            let x1 = centerX - width / 2
+            let y1 = centerY - height / 2
+            let x2 = centerX + width / 2
+            let y2 = centerY + height / 2
             
             // Debug first few detections
             if boxIndex < 3 && maxConfidence > confidenceThreshold {
-                print("🔍 Detection \(boxIndex): cx=\(centerX), cy=\(centerY), w=\(width), h=\(height), conf=\(maxConfidence), normalized=\(isNormalized)")
+                print("🔍 Detection \(boxIndex): cx=\(centerX), cy=\(centerY), w=\(width), h=\(height), conf=\(maxConfidence)")
+                print("    Box: (\(x1), \(y1), \(x2), \(y2))")
             }
             
-            var scaledCenterX = centerX
-            var scaledCenterY = centerY
-            var scaledWidth = width
-            var scaledHeight = height
-            
-            if isNormalized {
-                // Convert from normalized to pixel coordinates
-                scaledCenterX = centerX * Float(inputImageSize.width)
-                scaledCenterY = centerY * Float(inputImageSize.height)
-                scaledWidth = width * Float(inputImageSize.width)
-                scaledHeight = height * Float(inputImageSize.height)
-            }
-            
-            // Convert from center format to corner format
-            let x1 = scaledCenterX - scaledWidth / 2
-            let y1 = scaledCenterY - scaledHeight / 2
-            let x2 = scaledCenterX + scaledWidth / 2
-            let y2 = scaledCenterY + scaledHeight / 2
-            
-            // Convert coordinates back to original image space
-            let originalX1 = max(0, (CGFloat(x1) - xOffset) / scale)
-            let originalY1 = max(0, (CGFloat(y1) - yOffset) / scale)
-            let originalX2 = (CGFloat(x2) - xOffset) / scale
-            let originalY2 = (CGFloat(y2) - yOffset) / scale
+            // Convert coordinates back to original image space (no letterboxing offsets)
+            let originalX1 = max(0, CGFloat(x1) / scale)
+            let originalY1 = max(0, CGFloat(y1) / scale)
+            let originalX2 = CGFloat(x2) / scale
+            let originalY2 = CGFloat(y2) / scale
             
             let rect = CGRect(
                 x: originalX1,
@@ -248,85 +226,85 @@ class YOLOv8OutputParser {
 
 // MARK: - NSImage Extensions
 extension NSImage {
-    /// Resizes the image down (if needed) and letterboxes it into a square canvas.
-    /// Returns: A tuple containing the pixel buffer, scale factor, xOffset, yOffset, and the final NSImage used for inference.
-    func resizedDownwardLetterboxedWithMetadata(to targetSize: Int = 1600) -> (CVPixelBuffer?, CGFloat, CGFloat, CGFloat, NSImage) {
+    /// Resizes the image down (if needed) using bicubic interpolation, preserving aspect ratio.
+    /// Returns: A tuple containing the pixel buffer, scale factor, and the final NSImage used for inference.
+    func resizedBicubicMaxSide(to targetSize: Int = 1600) -> (CVPixelBuffer?, CGFloat, NSImage) {
         guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             print("❌ Failed to get CGImage from NSImage")
-            return (nil, 1.0, 0, 0, self)
+            return (nil, 1.0, self)
         }
         
         let originalWidth = CGFloat(cgImage.width)
         let originalHeight = CGFloat(cgImage.height)
-        
         let maxSide = max(originalWidth, originalHeight)
-        let scale = maxSide > CGFloat(targetSize) ? CGFloat(targetSize) / maxSide : 1.0
         
-        let newWidth = Int(originalWidth * scale)
-        let newHeight = Int(originalHeight * scale)
+        // Only resize if the largest dimension exceeds targetSize (like Python script)
+        let scale: CGFloat
+        let finalImage: NSImage
         
-        // Resize the image using bicubic interpolation
-        let resizedImage = NSImage(size: NSSize(width: newWidth, height: newHeight))
-        resizedImage.lockFocus()
-        NSGraphicsContext.current?.imageInterpolation = .high
-        self.draw(in: NSRect(x: 0, y: 0, width: newWidth, height: newHeight),
-                  from: NSRect(origin: .zero, size: self.size),
-                  operation: .copy, fraction: 1.0)
-        resizedImage.unlockFocus()
+        if maxSide > CGFloat(targetSize) {
+            scale = CGFloat(targetSize) / maxSide
+            let newWidth = Int(originalWidth * scale)
+            let newHeight = Int(originalHeight * scale)
+            
+            // Resize using bicubic interpolation (high quality)
+            let resizedImage = NSImage(size: NSSize(width: newWidth, height: newHeight))
+            resizedImage.lockFocus()
+            NSGraphicsContext.current?.imageInterpolation = .high  // Bicubic equivalent
+            self.draw(in: NSRect(x: 0, y: 0, width: newWidth, height: newHeight),
+                      from: NSRect(origin: .zero, size: self.size),
+                      operation: .copy, fraction: 1.0)
+            resizedImage.unlockFocus()
+            finalImage = resizedImage
+        } else {
+            // No resizing needed, return original image and scale=1.0
+            scale = 1.0
+            finalImage = self
+        }
         
-        // Create square canvas with black background
-        let canvasSize = NSSize(width: targetSize, height: targetSize)
-        let finalCanvas = NSImage(size: canvasSize)
-        finalCanvas.lockFocus()
-        NSColor.black.setFill()
-        NSBezierPath(rect: NSRect(origin: .zero, size: canvasSize)).fill()
+        // Convert to CVPixelBuffer with actual image dimensions (no letterboxing)
+        guard let finalCGImage = finalImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            print("❌ Failed to get CGImage from final image")
+            return (nil, scale, finalImage)
+        }
         
-        let xOffset = (CGFloat(targetSize) - CGFloat(newWidth)) / 2.0
-        let yOffset = (CGFloat(targetSize) - CGFloat(newHeight)) / 2.0
+        let finalWidth = finalCGImage.width
+        let finalHeight = finalCGImage.height
         
-        resizedImage.draw(in: NSRect(x: xOffset, y: yOffset, width: CGFloat(newWidth), height: CGFloat(newHeight)),
-                          from: NSRect(origin: .zero, size: resizedImage.size),
-                          operation: .copy, fraction: 1.0)
-        finalCanvas.unlockFocus()
-        
-        // Convert to CVPixelBuffer
         var pixelBuffer: CVPixelBuffer?
-        
-        // ✅ Use RGB format for better CoreML compatibility
         let attrs: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
             kCVPixelBufferCGBitmapContextCompatibilityKey: true,
-            kCVPixelBufferWidthKey: targetSize,
-            kCVPixelBufferHeightKey: targetSize,
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA  // Better CoreML compatibility
+            kCVPixelBufferWidthKey: finalWidth,
+            kCVPixelBufferHeightKey: finalHeight,
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA
         ]
         
-        let status = CVPixelBufferCreate(kCFAllocatorDefault, targetSize, targetSize,
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, finalWidth, finalHeight,
                                         kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pixelBuffer)
         
         guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
             print("❌ Failed to create pixel buffer: \(status)")
-            return (nil, scale, xOffset, yOffset, finalCanvas)
+            return (nil, scale, finalImage)
         }
         
         CVPixelBufferLockBaseAddress(buffer, [])
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
         
         guard let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buffer),
-                                 width: targetSize,
-                                 height: targetSize,
+                                 width: finalWidth,
+                                 height: finalHeight,
                                  bitsPerComponent: 8,
                                  bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
                                  space: CGColorSpaceCreateDeviceRGB(),
-                                 bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue),
-              let finalCG = finalCanvas.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                                 bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else {
             print("❌ Failed to create graphics context")
-            return (nil, scale, xOffset, yOffset, finalCanvas)
+            return (nil, scale, finalImage)
         }
         
-        ctx.draw(finalCG, in: CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
+        ctx.draw(finalCGImage, in: CGRect(x: 0, y: 0, width: finalWidth, height: finalHeight))
         
-        return (buffer, scale, xOffset, yOffset, finalCanvas)
+        return (buffer, scale, finalImage)
     }
     
     func drawDetections(_ detections: [Detection]) -> NSImage {
@@ -513,8 +491,8 @@ func runInference() {
         print("📸 Found \(filteredImages.count) images.")
     }
     
-    // === Define input image size used by the model ===
-    let inputSize = CGSize(width: 1600, height: 1600)
+    // === Define target size for resizing ===
+    let targetSize = 1600
     
     // === Perform inference on each image ===
     for (index, imageURL) in filteredImages.enumerated() {
@@ -525,8 +503,8 @@ func runInference() {
             continue
         }
         
-        // Resize + letterbox (downscale only)
-        let (pixelBuffer, scale, xPad, yPad, resizedImage) = nsImage.resizedDownwardLetterboxedWithMetadata(to: Int(inputSize.width))
+        // Resize using bicubic max side (like Python script)
+        let (pixelBuffer, scale, resizedImage) = nsImage.resizedBicubicMaxSide(to: targetSize)
         
         guard let buffer = pixelBuffer else {
             print("❌ Couldn't convert to pixel buffer")
@@ -588,10 +566,7 @@ func runInference() {
         let detections = YOLOv8OutputParser.parse(
             rawOutput: output,
             confidenceThreshold: 0.25, // Lower threshold to catch more detections
-            inputImageSize: inputSize,
-            scale: scale,
-            xOffset: xPad,
-            yOffset: yPad
+            scale: scale
         )
         
         print("🎯 Final detections: \(detections.count)")
