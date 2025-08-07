@@ -499,9 +499,8 @@ func runInference() {
     // === Load images from folder ===
     // ✅ Use relative path for better portability
     let imagesFolder = URL(fileURLWithPath: "./test_images/New images 1920x1440 og")
-    let fileManager = FileManager.default
     
-    guard let imageFiles = try? fileManager.contentsOfDirectory(at: imagesFolder, includingPropertiesForKeys: nil) else {
+    guard let imageFiles = try? fileManager.contentsOfDirectory(at: imagesFolder, includingPropertiesForKeys: nil, options: []) else {
         fatalError("❌ Cannot access images folder: \(imagesFolder.path)")
     }
     
