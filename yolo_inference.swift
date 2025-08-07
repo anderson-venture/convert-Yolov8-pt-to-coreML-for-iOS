@@ -404,21 +404,75 @@ func runInference() {
     // ✅ Try relative paths that work across different machines
     let possibleModelPaths = [
         "./1600Model_without_mosaic_rotation2_perspective0.0025.mlpackage",
+        "1600Model_without_mosaic_rotation2_perspective0.0025.mlpackage",
         "./1600Model_without_mosaic_rotation2_perspective0.0025.mlmodel",
         "./1600Model_without_mosaic_rotation2_perspective0.0025.mlmodelc",
-        "1600Model_without_mosaic_rotation2_perspective0.0025.mlpackage",
-        "1600Model_without_mosaic_rotation2_perspective0.0025.mlmodel"
+        "1600Model_without_mosaic_rotation2_perspective0.0025.mlmodel",
+        "1600Model_without_mosaic_rotation2_perspective0.0025.mlmodelc"
     ]
     
     var model: MLModel?
     var usedPath: String = ""
     
+    // First, let's check what files actually exist in the current directory
+    print("🔍 Checking current directory contents...")
+    let fileManager = FileManager.default
+    let currentDir = fileManager.currentDirectoryPath
+    print("📁 Current working directory: \(currentDir)")
+    
+    if let contents = try? fileManager.contentsOfDirectory(atPath: currentDir) {
+        let modelFiles = contents.filter { $0.contains("1600Model") }
+        print("📋 Found model-related files: \(modelFiles)")
+    }
+    
     for path in possibleModelPaths {
         let modelPath = URL(fileURLWithPath: path)
-        if let loadedModel = try? MLModel(contentsOf: modelPath) {
-            model = loadedModel
-            usedPath = path
-            break
+        print("🔍 Trying path: \(path)")
+        print("   Full URL: \(modelPath.path)")
+        print("   Exists: \(fileManager.fileExists(atPath: modelPath.path))")
+        
+        // Check if it's a directory (for .mlpackage)
+        var isDirectory: ObjCBool = false
+        let exists = fileManager.fileExists(atPath: modelPath.path, isDirectory: &isDirectory)
+        print("   Is directory: \(isDirectory.boolValue)")
+        
+        if exists {
+            do {
+                // For .mlpackage, we need to load it as a bundle/directory
+                if path.hasSuffix(".mlpackage") {
+                    print("   📦 Loading as mlpackage bundle...")
+                    // Try using MLModel.compileModel first for .mlpackage
+                    let compiledURL = try MLModel.compileModel(at: modelPath)
+                    let loadedModel = try MLModel(contentsOf: compiledURL)
+                    model = loadedModel
+                    usedPath = path
+                    print("✅ Successfully compiled and loaded mlpackage from: \(path)")
+                    break
+                } else {
+                    // For .mlmodel and .mlmodelc, load directly
+                    let loadedModel = try MLModel(contentsOf: modelPath)
+                    model = loadedModel
+                    usedPath = path
+                    print("✅ Successfully loaded model from: \(path)")
+                    break
+                }
+            } catch {
+                print("   ❌ Failed to load: \(error.localizedDescription)")
+                
+                // If compilation failed for .mlpackage, try loading directly
+                if path.hasSuffix(".mlpackage") {
+                    print("   🔄 Compilation failed, trying direct load...")
+                    do {
+                        let loadedModel = try MLModel(contentsOf: modelPath)
+                        model = loadedModel
+                        usedPath = path
+                        print("✅ Successfully loaded mlpackage directly from: \(path)")
+                        break
+                    } catch {
+                        print("   ❌ Direct load also failed: \(error.localizedDescription)")
+                    }
+                }
+            }
         }
     }
     
@@ -427,7 +481,13 @@ func runInference() {
         for path in possibleModelPaths {
             print("  - \(path)")
         }
-        fatalError("Please check model path and ensure it exists")
+        print("\n💡 Troubleshooting tips:")
+        print("1. Make sure you're running the script from the correct directory")
+        print("2. Check that the model file exists and has the correct name")
+        print("3. For .mlpackage models, the entire folder should exist")
+        print("4. Try using the absolute path to the model if relative paths don't work")
+        print("\n📁 Current directory contents shown above - verify your model file is listed")
+        return  // Changed from fatalError to graceful return
     }
     print("✅ Model loaded successfully from: \(usedPath)")
     
