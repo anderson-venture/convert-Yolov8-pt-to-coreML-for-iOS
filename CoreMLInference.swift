@@ -160,4 +160,4 @@ class CoreMLInference {
     }
 }
 
-// Entry point moved to main.swift
+// Entry point moved to main.swift for Xcode compatibility
