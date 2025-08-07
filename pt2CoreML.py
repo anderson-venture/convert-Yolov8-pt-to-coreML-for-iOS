@@ -22,7 +22,7 @@ try:
     print(f"🔄 Converting to CoreML format...")
     
     # Choose NMS setting (True = built-in NMS, False = manual NMS in iOS)
-    include_nms = True  # Change to False if you want manual control in iOS
+    include_nms = False  # Change to False if you want manual control in iOS
     
     if include_nms:
         print(f"📦 Including NMS in model (recommended for easier iOS integration)")

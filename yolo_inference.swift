@@ -83,21 +83,24 @@ class YOLOv8OutputParser {
         var featuresPerBox: Int
         
         if shape.count == 3 {
-            // Format: [batch, features, boxes] or [batch, boxes, features]
+            // Format from notebook: [1, 13, 52500] - [batch, features, boxes]
             if shape[1] == expectedFeatures {
-                // [1, 13, 8400] format
+                // [1, 13, 52500] format (expected from CoreML export)
                 featuresPerBox = shape[1]
                 numBoxes = shape[2]
+                print("📊 Using [batch, features, boxes] format: [\(shape[0]), \(shape[1]), \(shape[2])]")
             } else if shape[2] == expectedFeatures {
-                // [1, 8400, 13] format
+                // [1, 52500, 13] format (alternative)
                 numBoxes = shape[1]
                 featuresPerBox = shape[2]
+                print("📊 Using [batch, boxes, features] format: [\(shape[0]), \(shape[1]), \(shape[2])]")
             } else {
                 print("❌ Unexpected feature count. Expected \(expectedFeatures), got \(shape)")
+                print("    From notebook: model output should be (1, 13, 52500)")
                 return []
             }
         } else {
-            print("❌ Unsupported output format")
+            print("❌ Unsupported output format. Expected 3D tensor, got \(shape.count)D")
             return []
         }
         
@@ -128,13 +131,14 @@ class YOLOv8OutputParser {
             let width = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 2, shape: shape)
             let height = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 3, shape: shape)
             
-            // Convert from center format to corner format (assuming pixel coordinates)
+            // Model outputs coordinates in the 1600x1600 input space
+            // Convert from center format to corner format
             let x1 = centerX - width / 2
             let y1 = centerY - height / 2
             let x2 = centerX + width / 2
             let y2 = centerY + height / 2
             
-            // Calculate the centering offsets used when creating the pixel buffer
+            // Calculate the centering offsets used when creating the 1600x1600 pixel buffer
             let scaledImageWidth = originalImageSize.width * scale
             let scaledImageHeight = originalImageSize.height * scale
             let xOffset = (CGFloat(targetSize) - scaledImageWidth) / 2.0
@@ -143,12 +147,13 @@ class YOLOv8OutputParser {
             // Debug first few detections
             if boxIndex < 3 && maxConfidence > confidenceThreshold {
                 print("🔍 Detection \(boxIndex): cx=\(centerX), cy=\(centerY), w=\(width), h=\(height), conf=\(maxConfidence)")
-                print("    Box: (\(x1), \(y1), \(x2), \(y2))")
-                print("    Offsets: x=\(xOffset), y=\(yOffset), scale=\(scale)")
+                print("    Box in 1600x1600 space: (\(x1), \(y1), \(x2), \(y2))")
+                print("    Image scale=\(scale), offsets: x=\(xOffset), y=\(yOffset)")
+                print("    Original image size: \(originalImageSize)")
             }
             
-            // Convert coordinates back to original image space
-            // 1. Subtract the centering offset
+            // Convert coordinates back to original image space:
+            // 1. Subtract the centering offset (to get coordinates in scaled image space)
             // 2. Scale back to original image coordinates
             let originalX1 = max(0, (CGFloat(x1) - xOffset) / scale)
             let originalY1 = max(0, (CGFloat(y1) - yOffset) / scale)
@@ -176,7 +181,7 @@ class YOLOv8OutputParser {
         
         print("🎯 Found \(detections.count) raw detections")
         
-        // Apply NMS to remove overlapping detections
+        // Since the model was exported with nms=False, we need to apply NMS here
         let nmsDetections = performNMS(detections: detections, iouThreshold: 0.5)
         print("🎯 After NMS: \(nmsDetections.count) final detections")
         
@@ -187,10 +192,10 @@ class YOLOv8OutputParser {
         var index: Int
         
         if shape[1] == 13 {
-            // [1, 13, 8400] format
+            // [1, 13, 52500] format (from CoreML export)
             index = featureIndex * shape[2] + boxIndex
         } else {
-            // [1, 8400, 13] format  
+            // [1, 52500, 13] format (alternative)
             index = boxIndex * shape[2] + featureIndex
         }
         
