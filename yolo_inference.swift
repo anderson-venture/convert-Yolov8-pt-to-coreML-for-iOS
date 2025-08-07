@@ -171,12 +171,21 @@ class YOLOv8OutputParser {
             }
             
             // Convert coordinates back to original image space:
+            // Model outputs coordinates in 1600x1600 space, need to:
             // 1. Subtract the centering offset (to get coordinates in scaled image space)
             // 2. Scale back to original image coordinates
             let originalX1 = max(0, (CGFloat(x1) - xOffset) / scale)
             let originalY1 = max(0, (CGFloat(y1) - yOffset) / scale)
             let originalX2 = (CGFloat(x2) - xOffset) / scale
             let originalY2 = (CGFloat(y2) - yOffset) / scale
+            
+            // Debug coordinate transformation for high-confidence detections
+            if maxConfidence > 0.8 {
+                print("    Coordinate transformation:")
+                print("      1600x1600 box: (\(x1), \(y1), \(x2), \(y2))")
+                print("      After offset: (\(CGFloat(x1) - xOffset), \(CGFloat(y1) - yOffset), \(CGFloat(x2) - xOffset), \(CGFloat(y2) - yOffset))")
+                print("      Final original: (\(originalX1), \(originalY1), \(originalX2), \(originalY2))")
+            }
             
             let rect = CGRect(
                 x: originalX1,
@@ -199,8 +208,8 @@ class YOLOv8OutputParser {
         
         print("🎯 Found \(detections.count) raw detections")
         
-        // Since the model was exported with nms=False, we need to apply NMS here
-        let nmsDetections = performNMS(detections: detections, iouThreshold: 0.5)
+        // Since the model was exported with nms=False, we need to apply more aggressive NMS
+        let nmsDetections = performNMS(detections: detections, iouThreshold: 0.3)  // More aggressive
         print("🎯 After NMS: \(nmsDetections.count) final detections")
         
         return nmsDetections
