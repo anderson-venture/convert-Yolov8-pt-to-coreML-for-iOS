@@ -106,12 +106,28 @@ class YOLOv8OutputParser {
         
         print("📊 Processing \(numBoxes) boxes with \(featuresPerBox) features each")
         
-        // Parse detections
+        // Debug: Show some raw output values to understand the data format
+        print("🔍 Sample raw values from model output:")
+        for i in 0..<min(3, numBoxes) {
+            print("  Box \(i):")
+            for j in 0..<min(13, featuresPerBox) {
+                let val = getOutputValue(rawOutput, boxIndex: i, featureIndex: j, shape: shape)
+                print("    Feature \(j): \(val)")
+            }
+        }
+        
+        // Parse detections - YOLOv8 format
         for boxIndex in 0..<numBoxes {
+            // Get bounding box coordinates (first 4 values)
+            let centerX = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 0, shape: shape)
+            let centerY = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 1, shape: shape)
+            let width = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 2, shape: shape)
+            let height = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 3, shape: shape)
+            
+            // Get class confidences (values 4-12 for 9 classes)
             var maxConfidence: Float = 0
             var bestClassIndex: Int = 0
             
-            // Get class confidences (skip first 4 bbox coordinates)
             for classIndex in 0..<numClasses {
                 let featureIndex = 4 + classIndex
                 let confidence = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: featureIndex, shape: shape)
@@ -124,12 +140,6 @@ class YOLOv8OutputParser {
             
             // Filter by confidence threshold
             guard maxConfidence >= confidenceThreshold else { continue }
-            
-            // Get bounding box coordinates
-            let centerX = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 0, shape: shape)
-            let centerY = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 1, shape: shape)
-            let width = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 2, shape: shape)
-            let height = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 3, shape: shape)
             
             // Model outputs coordinates in the 1600x1600 input space
             // Convert from center format to corner format
@@ -144,12 +154,20 @@ class YOLOv8OutputParser {
             let xOffset = (CGFloat(targetSize) - scaledImageWidth) / 2.0
             let yOffset = (CGFloat(targetSize) - scaledImageHeight) / 2.0
             
-            // Debug first few detections
-            if boxIndex < 3 && maxConfidence > confidenceThreshold {
-                print("🔍 Detection \(boxIndex): cx=\(centerX), cy=\(centerY), w=\(width), h=\(height), conf=\(maxConfidence)")
+            // Debug first few detections and some high-confidence ones
+            if (boxIndex < 5) || (maxConfidence > 0.5) {
+                print("🔍 Detection \(boxIndex): class=\(bestClassIndex) (\(classNames[bestClassIndex]))")
+                print("    Raw values: cx=\(centerX), cy=\(centerY), w=\(width), h=\(height), conf=\(maxConfidence)")
                 print("    Box in 1600x1600 space: (\(x1), \(y1), \(x2), \(y2))")
                 print("    Image scale=\(scale), offsets: x=\(xOffset), y=\(yOffset)")
                 print("    Original image size: \(originalImageSize)")
+                
+                // Show all class confidences for this detection
+                print("    Class confidences:")
+                for i in 0..<numClasses {
+                    let conf = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 4 + i, shape: shape)
+                    print("      \(classNames[i]): \(conf)")
+                }
             }
             
             // Convert coordinates back to original image space:
