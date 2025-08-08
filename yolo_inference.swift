@@ -320,25 +320,80 @@ extension NSImage {
         return toPixelBuffer(targetSize: nil)
     }
     
-    /// Convert NSImage to CVPixelBuffer with optional resizing
-    /// - Parameter targetSize: If provided, resize to square canvas of this size
+    /// Convert NSImage to CVPixelBuffer with optional YOLO-style letterbox preprocessing
+    /// - Parameter targetSize: If provided, applies YOLO letterbox preprocessing to this size
     func toPixelBuffer(targetSize: Int?) -> CVPixelBuffer? {
         guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             print("❌ Failed to get CGImage from NSImage")
             return nil
         }
         
-        let width: Int
-        let height: Int
-        
         if let target = targetSize {
-            width = target
-            height = target
+            // Apply YOLO letterbox preprocessing
+            return letterboxPreprocess(cgImage: cgImage, targetSize: target)
         } else {
-            width = cgImage.width
-            height = cgImage.height
+            // Use original size (no preprocessing)
+            return createPixelBuffer(from: cgImage, width: cgImage.width, height: cgImage.height)
+        }
+    }
+    
+    /// YOLO-style letterbox preprocessing (matches Ultralytics implementation)
+    /// Maintains aspect ratio, resizes to fit target size, adds padding
+    private func letterboxPreprocess(cgImage: CGImage, targetSize: Int) -> CVPixelBuffer? {
+        let originalWidth = CGFloat(cgImage.width)
+        let originalHeight = CGFloat(cgImage.height)
+        let targetFloat = CGFloat(targetSize)
+        
+        // Calculate scale factor (same as YOLO: min(target/w, target/h))
+        let scale = min(targetFloat / originalWidth, targetFloat / originalHeight)
+        
+        // Calculate new dimensions (maintaining aspect ratio)
+        let newWidth = Int(originalWidth * scale)
+        let newHeight = Int(originalHeight * scale)
+        
+        // Calculate padding (to center the image)
+        let padX = (targetSize - newWidth) / 2
+        let padY = (targetSize - newHeight) / 2
+        
+        print("🔍 YOLO Letterbox: \(Int(originalWidth))x\(Int(originalHeight)) → \(newWidth)x\(newHeight) + pad(\(padX),\(padY))")
+        
+        // Create target size pixel buffer
+        guard let buffer = createPixelBuffer(width: targetSize, height: targetSize) else {
+            return nil
         }
         
+        CVPixelBufferLockBaseAddress(buffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        
+        guard let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buffer),
+                                 width: targetSize,
+                                 height: targetSize,
+                                 bitsPerComponent: 8,
+                                 bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+                                 space: CGColorSpaceCreateDeviceRGB(),
+                                 bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else {
+            print("❌ Failed to create graphics context")
+            return nil
+        }
+        
+        // Fill with gray background (YOLO uses 114/255 = 0.447 gray)
+        ctx.setFillColor(CGColor(red: 0.447, green: 0.447, blue: 0.447, alpha: 1.0))
+        ctx.fill(CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
+        
+        // Draw resized image centered with padding
+        let drawRect = CGRect(x: padX, y: padY, width: newWidth, height: newHeight)
+        ctx.draw(cgImage, in: drawRect)
+        
+        return buffer
+    }
+    
+    /// Helper to create pixel buffer from CGImage
+    private func createPixelBuffer(from cgImage: CGImage, width: Int, height: Int) -> CVPixelBuffer? {
+        return createPixelBuffer(width: width, height: height, drawImage: cgImage)
+    }
+    
+    /// Helper to create empty pixel buffer
+    private func createPixelBuffer(width: Int, height: Int, drawImage: CGImage? = nil) -> CVPixelBuffer? {
         let attrs: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
             kCVPixelBufferCGBitmapContextCompatibilityKey: true,
@@ -356,23 +411,23 @@ extension NSImage {
             return nil
         }
         
-        CVPixelBufferLockBaseAddress(buffer, [])
-        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
-        
-        guard let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buffer),
-                                 width: width,
-                                 height: height,
-                                 bitsPerComponent: 8,
-                                 bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
-                                 space: CGColorSpaceCreateDeviceRGB(),
-                                 bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else {
-            print("❌ Failed to create graphics context")
-            return nil
+        if let image = drawImage {
+            CVPixelBufferLockBaseAddress(buffer, [])
+            defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+            
+            guard let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buffer),
+                                     width: width,
+                                     height: height,
+                                     bitsPerComponent: 8,
+                                     bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
+                                     space: CGColorSpaceCreateDeviceRGB(),
+                                     bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else {
+                print("❌ Failed to create graphics context")
+                return nil
+            }
+            
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         }
-        
-        // Draw image, resizing if needed
-        let drawRect = CGRect(x: 0, y: 0, width: width, height: height)
-        ctx.draw(cgImage, in: drawRect)
         
         return buffer
     }
@@ -473,10 +528,48 @@ func runInference() {
     }
     print("✅ Model loaded successfully from: \(usedPath)")
     
-    // Print model information for debugging
+    // Print detailed model information for debugging
     let modelDescription = finalModel.modelDescription
     print("📋 Model inputs: \(modelDescription.inputDescriptionsByName.keys)")
     print("📋 Model outputs: \(modelDescription.outputDescriptionsByName.keys)")
+    
+    // Check input constraints to see if model has fixed or dynamic input size
+    for (inputName, inputDesc) in modelDescription.inputDescriptionsByName {
+        print("\n🔍 Input '\(inputName)' details:")
+        print("   Type: \(inputDesc.type)")
+        
+        if case .image = inputDesc.type {
+            if let imageConstraint = inputDesc.imageConstraint {
+                print("   Pixel format: \(imageConstraint.pixelFormatType)")
+                print("   Size constraint: \(imageConstraint.sizeConstraint)")
+                
+                switch imageConstraint.sizeConstraint.type {
+                case .enumerated:
+                    print("   ✅ FIXED SIZE MODEL - Accepts specific sizes only:")
+                    if let enumeratedSizes = imageConstraint.sizeConstraint.enumeratedImageSizes {
+                        for size in enumeratedSizes {
+                            print("     - \(size.pixelsWide) x \(size.pixelsHigh)")
+                        }
+                    }
+                case .range:
+                    print("   ✅ DYNAMIC SIZE MODEL - Accepts range of sizes:")
+                    let range = imageConstraint.sizeConstraint.pixelsWideRange
+                    let heightRange = imageConstraint.sizeConstraint.pixelsHighRange
+                    print("     Width: \(range.lowerBound) - \(range.upperBound)")
+                    print("     Height: \(heightRange.lowerBound) - \(heightRange.upperBound)")
+                case .unspecified:
+                    print("   ✅ FLEXIBLE SIZE MODEL - No specific size constraints")
+                @unknown default:
+                    print("   ❓ Unknown size constraint type")
+                }
+            }
+        } else if case .multiArray = inputDesc.type {
+            if let multiArrayConstraint = inputDesc.multiArrayConstraint {
+                print("   Shape: \(multiArrayConstraint.shape)")
+                print("   Data type: \(multiArrayConstraint.dataType)")
+            }
+        }
+    }
     
     // === Load images from folder ===
     // ✅ Use relative path for better portability
@@ -511,11 +604,18 @@ func runInference() {
             continue
         }
         
-        // For coordinate conversion, we'll use the original image dimensions
+        // Calculate letterbox parameters for coordinate conversion
         let originalSize = nsImage.size
-        let scale: CGFloat = 1.0  // No manual scaling since model handles it
-        let xPad: CGFloat = 0.0   // No manual padding since model handles it  
-        let yPad: CGFloat = 0.0   // No manual padding since model handles it
+        let modelInputSize: CGFloat = 1600  // Your model's expected input size
+        
+        // Calculate YOLO letterbox parameters
+        let yoloScale = min(modelInputSize / originalSize.width, modelInputSize / originalSize.height)
+        let newWidth = originalSize.width * yoloScale
+        let newHeight = originalSize.height * yoloScale
+        let xPad = (modelInputSize - newWidth) / 2.0
+        let yPad = (modelInputSize - newHeight) / 2.0
+        
+        print("🔍 Letterbox params: scale=\(yoloScale), pad=(\(xPad),\(yPad))")
         
         // Predict - try different input methods with detailed error reporting
         var prediction: MLFeatureProvider?
@@ -615,8 +715,8 @@ func runInference() {
         let detections = YOLOv8OutputParser.parse(
             rawOutput: output,
             confidenceThreshold: 0.25, // Standard YOLOv8 threshold (matches Ultralytics default)
-            inputImageSize: originalSize, // Use original image size since model handles preprocessing
-            scale: scale,
+            inputImageSize: CGSize(width: modelInputSize, height: modelInputSize), // Use model input size
+            scale: yoloScale,
             xOffset: xPad,
             yOffset: yPad
         )
