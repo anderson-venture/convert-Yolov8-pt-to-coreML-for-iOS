@@ -247,9 +247,7 @@ class YOLOv8OutputParser {
 }
 
 // MARK: - NSImage Extensions
-extension NSImage {
-
-    
+extension NSImage {  
     func drawDetections(_ detections: [Detection]) -> NSImage {
         let size = self.size
         let newImage = NSImage(size: size)
@@ -319,13 +317,27 @@ extension NSImage {
     /// Convert NSImage directly to CVPixelBuffer without any preprocessing
     /// This matches the Python script behavior of feeding original image to model
     func toPixelBuffer() -> CVPixelBuffer? {
+        return toPixelBuffer(targetSize: nil)
+    }
+    
+    /// Convert NSImage to CVPixelBuffer with optional resizing
+    /// - Parameter targetSize: If provided, resize to square canvas of this size
+    func toPixelBuffer(targetSize: Int?) -> CVPixelBuffer? {
         guard let cgImage = self.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             print("❌ Failed to get CGImage from NSImage")
             return nil
         }
         
-        let width = cgImage.width
-        let height = cgImage.height
+        let width: Int
+        let height: Int
+        
+        if let target = targetSize {
+            width = target
+            height = target
+        } else {
+            width = cgImage.width
+            height = cgImage.height
+        }
         
         let attrs: [CFString: Any] = [
             kCVPixelBufferCGImageCompatibilityKey: true,
@@ -358,7 +370,9 @@ extension NSImage {
             return nil
         }
         
-        ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        // Draw image, resizing if needed
+        let drawRect = CGRect(x: 0, y: 0, width: width, height: height)
+        ctx.draw(cgImage, in: drawRect)
         
         return buffer
     }
@@ -503,12 +517,21 @@ func runInference() {
         let xPad: CGFloat = 0.0   // No manual padding since model handles it  
         let yPad: CGFloat = 0.0   // No manual padding since model handles it
         
-        // Predict - try different input methods
+        // Predict - try different input methods with detailed error reporting
         var prediction: MLFeatureProvider?
+        
+        // First, let's inspect the image dimensions
+        print("🔍 Image info: \(nsImage.size.width) x \(nsImage.size.height)")
+        print("🔍 Pixel buffer: \(CVPixelBufferGetWidth(originalPixelBuffer)) x \(CVPixelBufferGetHeight(originalPixelBuffer))")
         
         // Method 1: Try using YOLOInput wrapper
         let input = YOLOInput(image: originalPixelBuffer)
-        prediction = try? finalModel.prediction(from: input)
+        do {
+            prediction = try finalModel.prediction(from: input)
+            print("✅ YOLOInput method succeeded")
+        } catch {
+            print("❌ YOLOInput failed with error: \(error.localizedDescription)")
+        }
         
         // Method 2: If that fails, try direct input
         if prediction == nil {
@@ -516,13 +539,47 @@ func runInference() {
             let inputName = modelDescription.inputDescriptionsByName.keys.first ?? "image"
             print("🔍 Using input name: \(inputName)")
             
-            if let directInput = try? MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: originalPixelBuffer)]) {
-                prediction = try? finalModel.prediction(from: directInput)
+            // Let's also check the expected input format
+            if let inputDescription = modelDescription.inputDescriptionsByName[inputName] {
+                print("🔍 Expected input type: \(inputDescription.type)")
+                if case .image = inputDescription.type {
+                    if let imageConstraint = inputDescription.imageConstraint {
+                        print("🔍 Expected image format: \(imageConstraint.pixelFormatType)")
+                        print("🔍 Expected image size: \(imageConstraint.pixelsWide) x \(imageConstraint.pixelsHigh)")
+                    }
+                }
+            }
+            
+            do {
+                let directInput = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: originalPixelBuffer)])
+                prediction = try finalModel.prediction(from: directInput)
+                print("✅ Direct input method succeeded")
+            } catch {
+                print("❌ Direct input failed with error: \(error.localizedDescription)")
+            }
+        }
+        
+        // Method 3: If both fail, try resizing to model's expected input size
+        if prediction == nil {
+            print("⚠️ Both methods failed, trying with resized image to 1600x1600...")
+            
+            if let resizedPixelBuffer = nsImage.toPixelBuffer(targetSize: 1600) {
+                print("🔍 Resized pixel buffer: \(CVPixelBufferGetWidth(resizedPixelBuffer)) x \(CVPixelBufferGetHeight(resizedPixelBuffer))")
+                
+                do {
+                    let inputName = modelDescription.inputDescriptionsByName.keys.first ?? "image"
+                    let resizedInput = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: resizedPixelBuffer)])
+                    prediction = try finalModel.prediction(from: resizedInput)
+                    print("✅ Resized input method succeeded")
+                } catch {
+                    print("❌ Resized input failed with error: \(error.localizedDescription)")
+                }
             }
         }
         
         guard let finalPrediction = prediction else {
             print("❌ All inference methods failed for \(imageURL.lastPathComponent)")
+            print("💡 This might be due to incompatible image format or size")
             continue
         }
         
