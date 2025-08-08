@@ -76,29 +76,8 @@ os.makedirs(output_dir, exist_ok=True)
 
 print(f"✅ Output directory ready at: {output_dir}")
 
-#Resizes downwards but not upwards (Yolov8s model trained at 1600x1600)
-def resize_bicubic_max_side(img, target_size=1600):
-    h, w = img.shape[:2]
-    max_side = max(h, w)
-
-    # Only resize if the largest dimension exceeds target_size
-    if max_side > target_size:
-        scale = target_size / max_side
-        new_w = int(w * scale)
-        new_h = int(h * scale)
-        resized_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
-        return resized_img, scale
-    else:
-        return img, 1.0  # No resizing needed, return original image and scale=1.0
-
 #Script for running inference
 from shapely.geometry import box as shapely_box
-
-def resize_bicubic_max_side(img, target_size=1280):
-    h, w = img.shape[:2]
-    scale = target_size / max(h, w)
-    resized = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
-    return resized, scale
 
 # 🧠 IoU calculator
 def iou(boxA, boxB):
@@ -151,27 +130,27 @@ for img_path in image_paths:
 
 print(f"✅ All enhanced + inferred images saved to: {output_dir}")
 
-#Zipping predicted images
-import shutil
-shutil.make_archive("predicted_images", 'zip', output_dir)
+# #Zipping predicted images
+# import shutil
+# shutil.make_archive("predicted_images", 'zip', output_dir)
 
-print("✅ Zipped predicted_images.zip is ready for download!")
+# print("✅ Zipped predicted_images.zip is ready for download!")
 
-#Define predicted images path:
-predicted_image_paths = sorted(glob.glob(os.path.join(output_dir, "*.jpeg")))
-print(f"✅ Found {len(predicted_image_paths)} images in {output_dir}")
+# #Define predicted images path:
+# predicted_image_paths = sorted(glob.glob(os.path.join(output_dir, "*.jpeg")))
+# print(f"✅ Found {len(predicted_image_paths)} images in {output_dir}")
 
-#Show first few images as examples:
-def show_sample_images(num_samples=3):
-    for i in range(min(num_samples, len(predicted_image_paths))):
-        img_path = predicted_image_paths[i]
-        img = Image.open(img_path)
-        plt.figure(figsize=(10, 10))
-        plt.imshow(img)
-        plt.title(f"Image {i+1}/{len(predicted_image_paths)}\n{os.path.basename(img_path)}")
-        plt.axis('off')
-        plt.show()
+# #Show first few images as examples:
+# def show_sample_images(num_samples=3):
+#     for i in range(min(num_samples, len(predicted_image_paths))):
+#         img_path = predicted_image_paths[i]
+#         img = Image.open(img_path)
+#         plt.figure(figsize=(10, 10))
+#         plt.imshow(img)
+#         plt.title(f"Image {i+1}/{len(predicted_image_paths)}\n{os.path.basename(img_path)}")
+#         plt.axis('off')
+#         plt.show()
 
-# Show first 3 processed images
-show_sample_images(3)
+# # Show first 3 processed images
+# show_sample_images(3)
 
