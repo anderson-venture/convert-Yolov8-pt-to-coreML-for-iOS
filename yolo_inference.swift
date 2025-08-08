@@ -134,11 +134,11 @@ class YOLOv8OutputParser {
             let xOffset = (CGFloat(targetSize) - scaledImageWidth) / 2.0
             let yOffset = (CGFloat(targetSize) - scaledImageHeight) / 2.0
             
-            // Debug high-confidence detections only
-            if maxConfidence > 0.8 {
-                print("🔍 High confidence detection: \(classNames[bestClassIndex]) (\(maxConfidence))")
-                print("    Coordinates: (\(centerX), \(centerY), \(width), \(height))")
-            }
+            // // Debug high-confidence detections only
+            // if maxConfidence > 0.8 {
+            //     print("🔍 High confidence detection: \(classNames[bestClassIndex]) (\(maxConfidence))")
+            //     print("    Coordinates: (\(centerX), \(centerY), \(width), \(height))")
+            // }
             
             // Convert coordinates back to original image space:
             // Model outputs coordinates in 1600x1600 space, need to:
