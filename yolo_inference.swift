@@ -546,10 +546,9 @@ func runInference() {
                 switch imageConstraint.sizeConstraint.type {
                 case .enumerated:
                     print("   ✅ FIXED SIZE MODEL - Accepts specific sizes only:")
-                    if let enumeratedSizes = imageConstraint.sizeConstraint.enumeratedImageSizes {
-                        for size in enumeratedSizes {
-                            print("     - \(size.pixelsWide) x \(size.pixelsHigh)")
-                        }
+                    let enumeratedSizes = imageConstraint.sizeConstraint.enumeratedImageSizes
+                    for size in enumeratedSizes {
+                        print("     - \(size.pixelsWide) x \(size.pixelsHigh)")
                     }
                 case .range:
                     print("   ✅ DYNAMIC SIZE MODEL - Accepts range of sizes:")
