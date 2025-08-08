@@ -89,12 +89,12 @@ class YOLOv8OutputParser {
             return []
         }
         
-        // Show first few values for debugging
-        print("🔍 First box sample values:")
-        for j in 0..<min(13, featuresPerBox) {
-            let val = getOutputValue(rawOutput, boxIndex: 0, featureIndex: j, shape: shape)
-            print("  [\(j)]: \(val)")
-        }
+        // // Show first few values for debugging
+        // print("🔍 First box sample values:")
+        // for j in 0..<min(13, featuresPerBox) {
+        //     let val = getOutputValue(rawOutput, boxIndex: 0, featureIndex: j, shape: shape)
+        //     print("  [\(j)]: \(val)")
+        // }
         
         // Parse detections - YOLOv8 format
         for boxIndex in 0..<numBoxes {
@@ -419,11 +419,13 @@ func runInference() {
                     let loadedModel = try MLModel(contentsOf: compiledURL)
                     model = loadedModel
                     usedPath = path
+                    print("✅ Compiled mlpackage")
                     break
                 } else {
                     let loadedModel = try MLModel(contentsOf: modelPath)
                     model = loadedModel
                     usedPath = path
+                    print("✅ Loaded model")
                     break
                 }
             } catch {
@@ -432,6 +434,7 @@ func runInference() {
                         let loadedModel = try MLModel(contentsOf: modelPath)
                         model = loadedModel
                         usedPath = path
+                        print("✅ Loaded model without compilation")
                         break
                     } catch {
                         continue
