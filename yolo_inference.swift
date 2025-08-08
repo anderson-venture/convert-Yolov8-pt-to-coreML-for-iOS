@@ -58,62 +58,42 @@ class YOLOv8OutputParser {
         targetSize: Int
     ) -> [Detection] {
         
-        print("🔍 Raw output shape: \(rawOutput.shape)")
-        print("🔍 Raw output strides: \(rawOutput.strides)")
-        
-        // YOLOv8 output format: [1, 84, 8400] or [1, 8400, 84]
-        // Where 84 = 4 (bbox) + 80 (COCO classes) but your model has 9 classes
-        // So it should be [1, 13, 8400] = 4 (bbox) + 9 (classes)
-        
         guard rawOutput.shape.count >= 2 else {
-            print("❌ Unexpected output shape")
+            print("❌ Invalid output shape: \(rawOutput.shape)")
             return []
         }
         
         let numClasses = 9
         let expectedFeatures = 4 + numClasses // 13 total
-        
         var detections: [Detection] = []
-        
-        // Handle different possible output formats
         let shape = rawOutput.shape.map { $0.intValue }
-        print("🔍 Output dimensions: \(shape)")
         
         var numBoxes: Int
         var featuresPerBox: Int
         
         if shape.count == 3 {
-            // Format from notebook: [1, 13, 52500] - [batch, features, boxes]
             if shape[1] == expectedFeatures {
-                // [1, 13, 52500] format (expected from CoreML export)
+                // [1, 13, N] format
                 featuresPerBox = shape[1]
                 numBoxes = shape[2]
-                print("📊 Using [batch, features, boxes] format: [\(shape[0]), \(shape[1]), \(shape[2])]")
             } else if shape[2] == expectedFeatures {
-                // [1, 52500, 13] format (alternative)
+                // [1, N, 13] format
                 numBoxes = shape[1]
                 featuresPerBox = shape[2]
-                print("📊 Using [batch, boxes, features] format: [\(shape[0]), \(shape[1]), \(shape[2])]")
             } else {
-                print("❌ Unexpected feature count. Expected \(expectedFeatures), got \(shape)")
-                print("    From notebook: model output should be (1, 13, 52500)")
+                print("❌ Unexpected feature count. Expected \(expectedFeatures), got shape: \(shape)")
                 return []
             }
         } else {
-            print("❌ Unsupported output format. Expected 3D tensor, got \(shape.count)D")
+            print("❌ Expected 3D tensor, got \(shape.count)D: \(shape)")
             return []
         }
         
-        print("📊 Processing \(numBoxes) boxes with \(featuresPerBox) features each")
-        
-        // Debug: Show some raw output values to understand the data format
-        print("🔍 Sample raw values from model output:")
-        for i in 0..<min(3, numBoxes) {
-            print("  Box \(i):")
-            for j in 0..<min(13, featuresPerBox) {
-                let val = getOutputValue(rawOutput, boxIndex: i, featureIndex: j, shape: shape)
-                print("    Feature \(j): \(val)")
-            }
+        // Show first few values for debugging
+        print("🔍 First box sample values:")
+        for j in 0..<min(13, featuresPerBox) {
+            let val = getOutputValue(rawOutput, boxIndex: 0, featureIndex: j, shape: shape)
+            print("  [\(j)]: \(val)")
         }
         
         // Parse detections - YOLOv8 format
@@ -154,20 +134,10 @@ class YOLOv8OutputParser {
             let xOffset = (CGFloat(targetSize) - scaledImageWidth) / 2.0
             let yOffset = (CGFloat(targetSize) - scaledImageHeight) / 2.0
             
-            // Debug first few detections and some high-confidence ones
-            if (boxIndex < 5) || (maxConfidence > 0.5) {
-                print("🔍 Detection \(boxIndex): class=\(bestClassIndex) (\(classNames[bestClassIndex]))")
-                print("    Raw values: cx=\(centerX), cy=\(centerY), w=\(width), h=\(height), conf=\(maxConfidence)")
-                print("    Box in 1600x1600 space: (\(x1), \(y1), \(x2), \(y2))")
-                print("    Image scale=\(scale), offsets: x=\(xOffset), y=\(yOffset)")
-                print("    Original image size: \(originalImageSize)")
-                
-                // Show all class confidences for this detection
-                print("    Class confidences:")
-                for i in 0..<numClasses {
-                    let conf = getOutputValue(rawOutput, boxIndex: boxIndex, featureIndex: 4 + i, shape: shape)
-                    print("      \(classNames[i]): \(conf)")
-                }
+            // Debug high-confidence detections only
+            if maxConfidence > 0.8 {
+                print("🔍 High confidence detection: \(classNames[bestClassIndex]) (\(maxConfidence))")
+                print("    Coordinates: (\(centerX), \(centerY), \(width), \(height))")
             }
             
             // Convert coordinates back to original image space:
@@ -179,25 +149,12 @@ class YOLOv8OutputParser {
             let originalX2 = (CGFloat(x2) - xOffset) / scale
             let originalY2 = (CGFloat(y2) - yOffset) / scale
             
-            // Debug coordinate transformation for high-confidence detections
-            if maxConfidence > 0.8 {
-                print("    Coordinate transformation:")
-                print("      1600x1600 box: (\(x1), \(y1), \(x2), \(y2))")
-                print("      After offset: (\(CGFloat(x1) - xOffset), \(CGFloat(y1) - yOffset), \(CGFloat(x2) - xOffset), \(CGFloat(y2) - yOffset))")
-                print("      Final original: (\(originalX1), \(originalY1), \(originalX2), \(originalY2))")
-            }
-            
             let rect = CGRect(
                 x: originalX1,
                 y: originalY1,
                 width: max(0, originalX2 - originalX1),
                 height: max(0, originalY2 - originalY1)
             )
-            
-            // Debug final rect for high-confidence detections
-            if maxConfidence > 0.8 {
-                print("      Final rect: \(rect)")
-            }
             
             let className = bestClassIndex < classNames.count ? classNames[bestClassIndex] : "unknown"
             
@@ -211,12 +168,8 @@ class YOLOv8OutputParser {
             detections.append(detection)
         }
         
-        print("🎯 Found \(detections.count) raw detections")
-        
-        // Since the model was exported with nms=False, we need to apply very aggressive NMS
-        // The model outputs many near-identical detections that need to be merged
-        let nmsDetections = performNMS(detections: detections, iouThreshold: 0.1)  // Very aggressive
-        print("🎯 After NMS: \(nmsDetections.count) final detections")
+        // Apply NMS deduplication
+        let nmsDetections = performNMS(detections: detections, iouThreshold: 0.6)
         
         return nmsDetections
     }
@@ -440,10 +393,7 @@ extension NSImage {
 
 // MARK: - Main CoreML Inference Function
 func runInference() {
-    print("🚀 Starting CoreML YOLOv8 Table Detection")
-    
     // === Load the CoreML Model ===
-    // ✅ Try relative paths that work across different machines
     let possibleModelPaths = [
         "./1600Model_without_mosaic_rotation2_perspective0.0025.mlpackage",
         "1600Model_without_mosaic_rotation2_perspective0.0025.mlpackage",
@@ -455,63 +405,36 @@ func runInference() {
     
     var model: MLModel?
     var usedPath: String = ""
-    
-    // First, let's check what files actually exist in the current directory
-    print("🔍 Checking current directory contents...")
     let fileManager = FileManager.default
-    let currentDir = fileManager.currentDirectoryPath
-    print("📁 Current working directory: \(currentDir)")
-    
-    if let contents = try? fileManager.contentsOfDirectory(atPath: currentDir) {
-        let modelFiles = contents.filter { $0.contains("1600Model") }
-        print("📋 Found model-related files: \(modelFiles)")
-    }
     
     for path in possibleModelPaths {
         let modelPath = URL(fileURLWithPath: path)
-        print("🔍 Trying path: \(path)")
-        print("   Full URL: \(modelPath.path)")
-        print("   Exists: \(fileManager.fileExists(atPath: modelPath.path))")
-        
-        // Check if it's a directory (for .mlpackage)
         var isDirectory: ObjCBool = false
         let exists = fileManager.fileExists(atPath: modelPath.path, isDirectory: &isDirectory)
-        print("   Is directory: \(isDirectory.boolValue)")
         
         if exists {
             do {
-                // For .mlpackage, we need to load it as a bundle/directory
                 if path.hasSuffix(".mlpackage") {
-                    print("   📦 Loading as mlpackage bundle...")
-                    // Try using MLModel.compileModel first for .mlpackage
                     let compiledURL = try MLModel.compileModel(at: modelPath)
                     let loadedModel = try MLModel(contentsOf: compiledURL)
                     model = loadedModel
                     usedPath = path
-                    print("✅ Successfully compiled and loaded mlpackage from: \(path)")
                     break
                 } else {
-                    // For .mlmodel and .mlmodelc, load directly
                     let loadedModel = try MLModel(contentsOf: modelPath)
                     model = loadedModel
                     usedPath = path
-                    print("✅ Successfully loaded model from: \(path)")
                     break
                 }
             } catch {
-                print("   ❌ Failed to load: \(error.localizedDescription)")
-                
-                // If compilation failed for .mlpackage, try loading directly
                 if path.hasSuffix(".mlpackage") {
-                    print("   🔄 Compilation failed, trying direct load...")
                     do {
                         let loadedModel = try MLModel(contentsOf: modelPath)
                         model = loadedModel
                         usedPath = path
-                        print("✅ Successfully loaded mlpackage directly from: \(path)")
                         break
                     } catch {
-                        print("   ❌ Direct load also failed: \(error.localizedDescription)")
+                        continue
                     }
                 }
             }
@@ -519,55 +442,31 @@ func runInference() {
     }
     
     guard let finalModel = model else {
-        print("❌ Failed to load CoreML model from any of these paths:")
-        for path in possibleModelPaths {
-            print("  - \(path)")
-        }
-        print("\n💡 Troubleshooting tips:")
-        print("1. Make sure you're running the script from the correct directory")
-        print("2. Check that the model file exists and has the correct name")
-        print("3. For .mlpackage models, the entire folder should exist")
-        print("4. Try using the absolute path to the model if relative paths don't work")
-        print("\n📁 Current directory contents shown above - verify your model file is listed")
-        return  // Changed from fatalError to graceful return
+        print("❌ Failed to load CoreML model")
+        return
     }
-    print("✅ Model loaded successfully from: \(usedPath)")
+    print("✅ Model loaded from: \(usedPath)")
     
-    // Print detailed model information for debugging
+    // Print essential model information
     let modelDescription = finalModel.modelDescription
-    print("📋 Model inputs: \(modelDescription.inputDescriptionsByName.keys)")
-    print("📋 Model outputs: \(modelDescription.outputDescriptionsByName.keys)")
-    
-    // Print detailed input requirements
-    for (name, inputDesc) in modelDescription.inputDescriptionsByName {
-        print("📋 Input '\(name)':")
-        print("   Type: \(inputDesc.type)")
-        if let imageConstraint = inputDesc.imageConstraint {
-            print("   Image size: \(imageConstraint.pixelsWide) x \(imageConstraint.pixelsHigh)")
-            print("   Pixel format: \(imageConstraint.pixelFormatType)")
-        }
-        if let multiArrayConstraint = inputDesc.multiArrayConstraint {
-            print("   MultiArray shape: \(multiArrayConstraint.shape)")
-            print("   Data type: \(multiArrayConstraint.dataType)")
-        }
-    }
+    print("📋 Inputs: \(modelDescription.inputDescriptionsByName.keys)")
+    print("📋 Outputs: \(modelDescription.outputDescriptionsByName.keys)")
     
     // === Load images from folder ===
-    // ✅ Use relative path for better portability
     let imagesFolder = URL(fileURLWithPath: "./test_images/New images 1920x1440 og")
     
     guard let imageFiles = try? fileManager.contentsOfDirectory(at: imagesFolder, includingPropertiesForKeys: nil, options: []) else {
-        fatalError("❌ Cannot access images folder: \(imagesFolder.path)")
+        print("❌ Cannot access images folder: \(imagesFolder.path)")
+        return
     }
     
     let filteredImages = imageFiles.filter { ["jpg", "jpeg", "png"].contains($0.pathExtension.lowercased()) }
     
     if filteredImages.isEmpty {
-        print("⚠️ No JPG or PNG images found in folder.")
+        print("❌ No images found")
         return
-    } else {
-        print("📸 Found \(filteredImages.count) images.")
     }
+    print("📸 Processing \(filteredImages.count) images")
     
     // === Define target size for resizing ===
     let targetSize = 1600
@@ -577,79 +476,51 @@ func runInference() {
         print("\n🔍 Processing (\(index + 1)/\(filteredImages.count)): \(imageURL.lastPathComponent)")
         
         guard let nsImage = NSImage(contentsOf: imageURL) else {
-            print("❌ Could not load image: \(imageURL.lastPathComponent)")
+            print("❌ Could not load image")
             continue
         }
         
-        // Resize using bicubic max side (like Python script)
         let (pixelBuffer, scale, resizedImage) = nsImage.resizedBicubicMaxSide(to: targetSize)
         
         guard let buffer = pixelBuffer else {
-            print("❌ Couldn't convert to pixel buffer")
+            print("❌ Failed to create pixel buffer")
             continue
         }
         
-        // Debug pixel buffer info
-        print("🔍 Pixel buffer info:")
-        print("   Size: \(CVPixelBufferGetWidth(buffer)) x \(CVPixelBufferGetHeight(buffer))")
-        print("   Format: \(CVPixelBufferGetPixelFormatType(buffer))")
-        
-        // Predict - try different input methods with detailed error reporting
+        // === STEP 1: Try inference ===
         var prediction: MLFeatureProvider?
-        var lastError: Error?
+        let inputName = modelDescription.inputDescriptionsByName.keys.first ?? "image"
         
-        // Method 1: Try using YOLOInput wrapper
-        print("🔍 Method 1: Trying YOLOInput wrapper...")
-        let input = YOLOInput(image: buffer)
         do {
+            let input = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: buffer)])
             prediction = try finalModel.prediction(from: input)
-            print("✅ YOLOInput succeeded!")
+            print("✅ Inference succeeded")
         } catch {
-            print("❌ YOLOInput failed: \(error.localizedDescription)")
-            lastError = error
-        }
-        
-        // Method 2: If that fails, try direct input
-        if prediction == nil {
-            print("🔍 Method 2: Trying direct input...")
-            let inputName = modelDescription.inputDescriptionsByName.keys.first ?? "image"
-            print("   Using input name: \(inputName)")
-            
-            do {
-                let directInput = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: buffer)])
-                prediction = try finalModel.prediction(from: directInput)
-                print("✅ Direct input succeeded!")
-            } catch {
-                print("❌ Direct input failed: \(error.localizedDescription)")
-                lastError = error
-            }
+            print("❌ Inference failed: \(error)")
+            continue
         }
         
         guard let finalPrediction = prediction else {
-            print("❌ All inference methods failed for \(imageURL.lastPathComponent)")
-            if let error = lastError {
-                print("   Last error: \(error)")
-            }
+            print("❌ No prediction result")
             continue
         }
         
+        // === STEP 2: Find output ===
         print("📦 Available outputs: \(finalPrediction.featureNames)")
         
-        // Try different possible output names (including more common ones)
         var rawOutput: MLMultiArray?
         let possibleOutputNames = ["output", "output0", "Identity", "Identity:0", "var_914", "1", "predictions", "detections"]
         
         for outputName in possibleOutputNames {
             if let output = finalPrediction.featureValue(for: outputName)?.multiArrayValue {
                 rawOutput = output
-                print("✅ Found output with name: '\(outputName)'")
+                print("✅ Using output: '\(outputName)', shape: \(output.shape)")
                 break
             }
         }
         
         guard let output = rawOutput else {
-            print("❌ Could not find valid output. Available outputs: \(finalPrediction.featureNames)")
-            // List all outputs for debugging
+            print("❌ No valid output found")
             for featureName in finalPrediction.featureNames {
                 if let feature = finalPrediction.featureValue(for: featureName) {
                     print("  - \(featureName): \(feature.type)")
@@ -661,32 +532,26 @@ func runInference() {
             continue
         }
         
-        // Parse detections
+        // === STEP 3: Parse detections ===
         let detections = YOLOv8OutputParser.parse(
             rawOutput: output,
-            confidenceThreshold: 0.25, // Lower threshold to catch more detections
+            confidenceThreshold: 0.25,
             scale: scale,
             originalImageSize: nsImage.size,
             targetSize: targetSize
         )
         
-        print("🎯 Final detections: \(detections.count)")
+        print("🎯 Found \(detections.count) detections")
         
-        // Print detection details
-        for (i, detection) in detections.enumerated() {
-            print("  Detection \(i + 1): \(detection.className) (\(String(format: "%.1f", detection.score * 100))%) at \(detection.rect)")
-        }
-        
-        // Draw and save annotated image
+        // === STEP 4: Save result ===
         let annotatedImage = resizedImage.drawDetections(detections)
         let outURL = imagesFolder.appendingPathComponent("pred_\(imageURL.lastPathComponent)")
         annotatedImage.saveJPG(to: outURL)
-        print("✅ Saved: \(outURL.lastPathComponent)")
+        print("✅ Saved result")
     }
     
-    print("\n🎉 All done!")
+    print("\n🎉 Done!")
 }
 
 // MARK: - Main Entry Point
-print("🚀 Starting CoreML YOLOv8 Table Detection - Standalone Version")
 runInference()
